@@ -16,7 +16,10 @@ jobs:
         with:
           gradle-version: '8.9'
       - name: Unzip project
-        run: unzip -q Vibely-step10.zip
+        run: |
+          unzip -q Vibely-step10.zip
+          sed -i '1i import java.util.Properties' Vibely/app/build.gradle.kts
+          sed -i 's/java\.util\.Properties()/Properties()/' Vibely/app/build.gradle.kts
       - name: Build debug APK
         run: |
           cd Vibely
