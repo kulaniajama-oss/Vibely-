@@ -1,9 +1,12 @@
 name: Build APK
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   VIBELY_BACKEND_URL: ${{ vars.VIBELY_BACKEND_URL }}
@@ -15,28 +18,49 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-java@v4
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
       - name: Unzip project (newest Vibely-*.zip in the repo)
         run: |
-          ZIP=$(ls Vibely-*.zip 2>/dev/null | sort -V | tail -1 || true)
-          if [ -n "$ZIP" ]; then
-            echo "Using $ZIP"
-            rm -rf Vibely
-            unzip -q "$ZIP"
-          else
-            echo "No Vibely-*.zip found: using the Vibely folder already in the repo."
+          newest=""
+          newest_time=0
+          for z in Vibely-*.zip; do
+            [ -f "$z" ] || continue
+            t=$(git log -1 --format=%ct -- "$z")
+            t=${t:-0}
+            if [ "$t" -ge "$newest_time" ]; then
+              newest="$z"
+              newest_time="$t"
+            fi
+          done
+          if [ -z "$newest" ]; then
+            echo "::error::No Vibely-*.zip found in the repo root."
+            exit 1
           fi
-          test -f Vibely/app/build.gradle.kts
+          echo "Using: $newest"
+          unzip -q -o "$newest"
+          rm -rf __MACOSX
+          ls
+
+      - name: Fix Properties import (safety patch)
+        run: |
+          f=Vibely/app/build.gradle.kts
+          grep -q '^import java.util.Properties' "$f" || sed -i '1i import java.util.Properties' "$f"
+          sed -i 's/java\.util\.Properties()/Properties()/' "$f"
 
       - name: Add Firebase config (optional)
         env:
@@ -44,44 +68,40 @@ jobs:
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > Vibely/app/google-services.json
-            echo "Firebase config added."
+            echo "Firebase config added: cloud sync enabled."
+          else
+            echo "No GOOGLE_SERVICES_JSON secret: building without cloud sync."
           fi
 
       - name: Prepare signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
-            echo "Using your keystore from GitHub secrets."
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/vibely.jks"
-            echo "VIBELY_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
-            echo "VIBELY_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
-            echo "VIBELY_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/vibely-release.jks"
+            echo "VIBELY_KEYSTORE_FILE=$RUNNER_TEMP/vibely-release.jks" >> "$GITHUB_ENV"
+            echo "Signing key ready."
           else
-            echo "No keystore secrets: making a temporary key (APK installs, but cannot update an older install)."
-            keytool -genkeypair -keystore "$RUNNER_TEMP/vibely.jks" -storepass vibelyci123 -keypass vibelyci123 \
-              -alias vibelyci -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Vibely CI, O=Vibely, C=US"
-            echo "VIBELY_KEYSTORE_PASSWORD=vibelyci123" >> "$GITHUB_ENV"
-            echo "VIBELY_KEY_ALIAS=vibelyci" >> "$GITHUB_ENV"
-            echo "VIBELY_KEY_PASSWORD=vibelyci123" >> "$GITHUB_ENV"
+            echo "::warning::No KEYSTORE_BASE64 secret: the release APK will not be signed."
           fi
-          echo "VIBELY_KEYSTORE_FILE=$RUNNER_TEMP/vibely.jks" >> "$GITHUB_ENV"
 
       - name: Build release APK
         working-directory: Vibely
+        env:
+          VIBELY_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          VIBELY_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          VIBELY_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           export VIBELY_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))
-          gradle :app:assembleRelease
+          gradle :app:assembleRelease --stacktrace
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
-          name: Vibely-apk
+          name: Vibely-release-apk
           path: Vibely/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       - name: Remove signing key from the runner
         if: always()
-        run: rm -f "$RUNNER_TEMP/vibely.jks" Vibely/app/google-services.json
+        run: rm -f "$RUNNER_TEMP/vibely-release.jks" Vibely/app/google-services.json
