@@ -22,21 +22,23 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Fix Properties import
+      - name: Unzip project
         run: |
-          grep -q '^import java.util.Properties' app/build.gradle.kts || sed -i '1i import java.util.Properties' app/build.gradle.kts
-          sed -i 's/java\.util\.Properties()/Properties()/' app/build.gradle.kts
+          unzip -q Vibely-step11c.zip
+          grep -q '^import java.util.Properties' Vibely/app/build.gradle.kts || sed -i '1i import java.util.Properties' Vibely/app/build.gradle.kts
+          sed -i 's/java\.util\.Properties()/Properties()/' Vibely/app/build.gradle.kts
       - name: Add Firebase config (optional)
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            printf '%s' "$GOOGLE_SERVICES_JSON" > app/google-services.json
+            printf '%s' "$GOOGLE_SERVICES_JSON" > Vibely/app/google-services.json
           fi
       - name: Build debug APK
+        working-directory: Vibely
         run: gradle :app:assembleDebug
       - uses: actions/upload-artifact@v4
         with:
           name: Vibely-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: Vibely/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
