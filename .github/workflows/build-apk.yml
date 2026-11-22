@@ -80,12 +80,14 @@ jobs:
           if [ -n "$KEYSTORE_BASE64" ]; then
             printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/vibely-release.jks"
             echo "VIBELY_KEYSTORE_FILE=$RUNNER_TEMP/vibely-release.jks" >> "$GITHUB_ENV"
-            echo "Signing key ready."
+            echo "BUILD_TASK=assembleRelease" >> "$GITHUB_ENV"
+            echo "Signing key ready: building signed release APK."
           else
-            echo "::warning::No KEYSTORE_BASE64 secret: the release APK will not be signed."
+            echo "BUILD_TASK=assembleDebug" >> "$GITHUB_ENV"
+            echo "::warning::No KEYSTORE_BASE64 secret: building a debug APK (auto-signed, installable)."
           fi
 
-      - name: Build release APK
+      - name: Build APK
         working-directory: Vibely
         env:
           VIBELY_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -93,13 +95,13 @@ jobs:
           VIBELY_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           export VIBELY_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))
-          gradle :app:assembleRelease --stacktrace
+          gradle :app:$BUILD_TASK --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Vibely-release-apk
-          path: Vibely/app/build/outputs/apk/release/*.apk
+          name: Vibely-apk
+          path: Vibely/app/build/outputs/apk/*/*.apk
           if-no-files-found: error
 
       - name: Remove signing key from the runner
