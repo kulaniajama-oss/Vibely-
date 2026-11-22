@@ -1,4 +1,5 @@
 name: Build APK
+
 on:
   workflow_dispatch:
   push:
@@ -6,8 +7,6 @@ on:
 
 env:
   VIBELY_BACKEND_URL: ${{ vars.VIBELY_BACKEND_URL }}
-  # Leave VIBELY_TEST_ADS unset (or not "true") = REAL Start.io ads. Set it to true = test ads.
-  VIBELY_TEST_ADS: ${{ vars.VIBELY_TEST_ADS }}
   PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
   PIXABAY_API_KEY: ${{ secrets.PIXABAY_API_KEY }}
   VIMEO_ACCESS_TOKEN: ${{ secrets.VIMEO_ACCESS_TOKEN }}
@@ -29,9 +28,14 @@ jobs:
 
       - name: Unzip project (newest Vibely-*.zip in the repo)
         run: |
-          ZIP=$(ls Vibely-*.zip | sort -V | tail -1)
-          echo "Using $ZIP"
-          unzip -q "$ZIP"
+          ZIP=$(ls Vibely-*.zip 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$ZIP" ]; then
+            echo "Using $ZIP"
+            rm -rf Vibely
+            unzip -q "$ZIP"
+          else
+            echo "No Vibely-*.zip found: using the Vibely folder already in the repo."
+          fi
           test -f Vibely/app/build.gradle.kts
 
       - name: Add Firebase config (optional)
@@ -40,6 +44,7 @@ jobs:
         run: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
             printf '%s' "$GOOGLE_SERVICES_JSON" > Vibely/app/google-services.json
+            echo "Firebase config added."
           fi
 
       - name: Prepare signing key
@@ -56,16 +61,16 @@ jobs:
             echo "VIBELY_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
             echo "VIBELY_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
           else
-            echo "No keystore secrets: making a temporary key. The APK installs fine, but its signature changes every run, so uninstall the old Vibely before installing a new one."
+            echo "No keystore secrets: making a temporary key (APK installs, but cannot update an older install)."
             keytool -genkeypair -keystore "$RUNNER_TEMP/vibely.jks" -storepass vibelyci123 -keypass vibelyci123 \
-              -alias vibelyci -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Vibely CI"
+              -alias vibelyci -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Vibely CI, O=Vibely, C=US"
             echo "VIBELY_KEYSTORE_PASSWORD=vibelyci123" >> "$GITHUB_ENV"
             echo "VIBELY_KEY_ALIAS=vibelyci" >> "$GITHUB_ENV"
             echo "VIBELY_KEY_PASSWORD=vibelyci123" >> "$GITHUB_ENV"
           fi
           echo "VIBELY_KEYSTORE_FILE=$RUNNER_TEMP/vibely.jks" >> "$GITHUB_ENV"
 
-      - name: Build release APK (real ads)
+      - name: Build release APK
         working-directory: Vibely
         run: |
           export VIBELY_VERSION_CODE=$((100 + GITHUB_RUN_NUMBER))
@@ -76,3 +81,7 @@ jobs:
           name: Vibely-apk
           path: Vibely/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Remove signing key from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/vibely.jks" Vibely/app/google-services.json
